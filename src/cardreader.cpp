@@ -22,6 +22,7 @@ void CardReader::init(Handle<Object> target) {
     Nan::SetPrototypeTemplate(tpl, "_connect", Nan::New<FunctionTemplate>(Connect));
     Nan::SetPrototypeTemplate(tpl, "_disconnect", Nan::New<FunctionTemplate>(Disconnect));
     Nan::SetPrototypeTemplate(tpl, "_transmit", Nan::New<FunctionTemplate>(Transmit));
+	Nan::SetPrototypeTemplate(tpl, "_transmit_sync", Nan::New<FunctionTemplate>(TransmitSync));
     Nan::SetPrototypeTemplate(tpl, "_control", Nan::New<FunctionTemplate>(Control));
     Nan::SetPrototypeTemplate(tpl, "close", Nan::New<FunctionTemplate>(Close));
 
@@ -241,6 +242,48 @@ NAN_METHOD(CardReader::Transmit) {
     assert(status == 0);
 
 
+}
+
+
+NAN_METHOD(CardReader::TransmitSync) {
+
+	Nan::HandleScope scope;
+
+	// The first argument is the buffer to be transmitted.
+	if (!Buffer::HasInstance(info[0])) {
+		return Nan::ThrowError("First argument must be a Buffer");
+	}
+
+	// The second argument is the length of the data to be received
+	if (!info[1]->IsUint32()) {
+		return Nan::ThrowError("Second argument must be an integer");
+	}
+
+	// The third argument is the protocol to be used
+	if (!info[2]->IsUint32()) {
+		return Nan::ThrowError("Third argument must be an integer");
+	}
+
+	Local<Object> buffer_data = info[0]->ToObject();
+	uint32_t out_len = info[1]->Uint32Value();
+	uint32_t protocol = info[2]->Uint32Value();
+
+	// This creates our work request, including the libuv struct.
+	CardReader *reader = Nan::ObjectWrap::Unwrap<CardReader>(info.This());
+	TransmitInput *ti = new TransmitInput();
+	ti->card_protocol = protocol;
+	ti->in_data = new unsigned char[Buffer::Length(buffer_data)];
+	ti->in_len = Buffer::Length(buffer_data);
+	memcpy(ti->in_data, Buffer::Data(buffer_data), ti->in_len);
+
+	ti->out_len = out_len;
+
+	// Schedule our work request with libuv. Here you can specify the functions
+	// that should be executed in the threadpool and back in the main thread
+	// after the threadpool function completed.
+	TransmitResult *tr = DoSyncTransmit(reader, ti);
+
+	info.GetReturnValue().Set(Nan::CopyBuffer(reinterpret_cast<char*>(tr->data), tr->len).ToLocalChecked());
 }
 
 NAN_METHOD(CardReader::Control) {
@@ -572,6 +615,31 @@ void CardReader::DoTransmit(uv_work_t* req) {
     tr->result = result;
 
     baton->result = tr;
+}
+
+CardReader::TransmitResult *CardReader::DoSyncTransmit(CardReader* obj, TransmitInput *ti) {
+
+	TransmitResult *tr = new TransmitResult();
+	tr->data = new unsigned char[ti->out_len];
+	tr->len = ti->out_len;
+	LONG result = SCARD_E_INVALID_HANDLE;
+
+	/* Lock mutex */
+	uv_mutex_lock(&obj->m_mutex);
+	/* Connected? */
+	// Under windows, SCARD_IO_REQUEST param must be NULL. Else error RPC_X_BAD_STUB_DATA / 0x06F7 on each call.
+	if (obj->m_card_handle) {
+		SCARD_IO_REQUEST send_pci = { ti->card_protocol, sizeof(SCARD_IO_REQUEST) };
+		result = SCardTransmit(obj->m_card_handle, &send_pci, ti->in_data, ti->in_len,
+			NULL, tr->data, &tr->len);
+	}
+
+	/* Unlock the mutex */
+	uv_mutex_unlock(&obj->m_mutex);
+
+	tr->result = result;
+
+	return tr;
 }
 
 void CardReader::AfterTransmit(uv_work_t* req, int status) {

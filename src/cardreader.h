@@ -99,6 +99,7 @@ class CardReader: public Nan::ObjectWrap {
         static NAN_METHOD(Connect);
         static NAN_METHOD(Disconnect);
         static NAN_METHOD(Transmit);
+		static NAN_METHOD(TransmitSync);
         static NAN_METHOD(Control);
         static NAN_METHOD(Close);
 
@@ -107,6 +108,7 @@ class CardReader: public Nan::ObjectWrap {
         static void DoConnect(uv_work_t* req);
         static void DoDisconnect(uv_work_t* req);
         static void DoTransmit(uv_work_t* req);
+		static TransmitResult* DoSyncTransmit(CardReader* obj, TransmitInput *ti);
         static void DoControl(uv_work_t* req);
         static void CloseCallback(uv_handle_t *handle);
 
